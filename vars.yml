@@ -4,10 +4,10 @@ local_dbport: 5432
 local_dbhost: 127.0.0.1
 local_dbname: bucardo
 local_dbuser: postgres
-dbhost: database-1.cluster-c5bvrqroroz0.us-east-1.rds.amazonaws.com
+dbhost: database-1.xxxxx.rds.amazonaws.com
 dbport: 5432
 dbusername: postgres
-dest_dbhost: 35.185.6.252
+dest_dbhost: 35.X.X.X
 dest_dbport: 5432
 dest_dbusername: postgres
 db_name: migrate_db1
