@@ -1,0 +1,20 @@
+---
+# vars file for bucardo
+local_dbport: 5432
+local_dbhost: 127.0.0.1
+local_dbname: bucardo
+local_dbuser: postgres
+dbhost: database-1.cluster-c5bvrqroroz0.us-east-1.rds.amazonaws.com
+dbport: 5432
+dbusername: postgres
+dest_dbhost: 35.185.6.252
+dest_dbport: 5432
+dest_dbusername: postgres
+db_name: migrate_db1
+table_name: company
+bucardo_src_db: SRC
+bucardo_dest_db: DEST
+bucardo_db_group: BUCARDO_GROUP
+herd_name: BUCARDO_HERD
+bucardo_sync: RDS_TO_CLOUDSQL
+

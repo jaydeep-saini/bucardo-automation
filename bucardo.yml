@@ -1,0 +1,160 @@
+---
+- hosts: localhost
+  name: install and configure postgres and bucardo 
+  become: yes
+  vars_files:
+    - "vars.yml"
+    - "confidential.yml"
+  tasks:
+    - name: update postgres repo
+      shell: sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt/ `lsb_release -cs`-pgdg main" >> /etc/apt/sources.list.d/pgdg.list'
+    - name: Download Postgres Keys
+      shell: wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
+    - name: Install Postgres, Dependencies and Bucardo 
+      apt:
+       name: "{{ item }}"
+       state: present
+      with_items:
+       - bucardo
+       - postgresql
+       - libdbix-safe-perl
+       - libdbd-pg-perl
+       - libboolean-perl
+       - expect
+       - python3-psycopg2
+       - python3-pip
+    - name: Connect to Postgres and update password
+      shell: su - postgres -c "psql -U postgres -d postgres -c \"alter user {{ local_dbuser }} with password '{{ local_postgrespass }}';\""
+      run_once: true
+    - name: create bucardo db
+      shell: su - postgres -c "psql -U postgres -d postgres -c \"CREATE DATABASE {{ local_dbname }};\""
+      register: command_result
+      failed_when: >
+        command_result.rc != 0 and ("already exists" not in command_result.stderr)
+      changed_when: >
+        command_result.rc == 0
+    - name: Update line in postgres pg_hba.conf
+      lineinfile:
+       path: /etc/postgresql/12/main/pg_hba.conf
+       line: 'local all postgres md5'
+    - name: restart posrgres
+      service:
+       name: postgresql
+       state: restarted
+    - name: Add content in .pgpass
+      lineinfile:
+       path: $HOME/.pgpass
+       line: '{{ local_dbhost }}:{{ local_dbport }}:{{ local_dbname }}:{{ local_dbuser }}:{{ local_postgrespass }}'
+       create: yes
+       mode: '0600'
+    - name: Create bucardo directory and change owner
+      file:
+       path: "{{ item }}"
+       state: directory
+       owner: postgres
+       group: postgres
+       recurse: yes
+      with_items:
+       - /var/log/bucardo
+       - /var/run/bucardo
+      tags:
+       - dir
+    - name: create .bucardorc to store local postgres details
+      file:
+       path: $HOME/.bucardorc
+       state: touch
+    - name: add content in .bucardorc
+      blockinfile:
+       path: $HOME/.bucardorc
+       block: |
+          dbport = {{ local_dbport }}
+          dbhost = {{ local_dbhost }}
+          dbname = {{ local_dbname }}
+          dbuser = {{ local_dbuser }}
+          dbpass = {{ local_postgrespass }}
+    - name: check connectivity with source db
+      shell: psql "host={{ dbhost }} port={{ dbport }} user={{ dbusername }} password={{ dbpass }}"
+    - name: check connectivity with destination db
+      shell: psql "host={{ dest_dbhost }} port={{ dest_dbport }} user={{ dest_dbusername }} password={{ dest_dbpass }}"
+    - name: create a DB in source DB HOST
+      postgresql_db:
+       name: "{{ db_name }}"
+       login_host: "{{ dbhost }}"
+       login_password: "{{ dbpass }}"
+       login_user: "{{ dbusername }}"
+    - name: take db dump of schema
+      postgresql_db:
+         name: "{{ db_name }}"
+         login_host: "{{ dbhost }}"
+         login_password: "{{ dbpass }}"
+         login_user: "{{ dbusername }}"
+         state: dump
+         target: /tmp/migrate_db1.sql
+         target_opts: "-n public"
+    - name: Create DB Destination DB
+      postgresql_db:
+       name: "{{ db_name }}"
+       login_host: "{{ dest_dbhost }}"
+       login_password: "{{ dest_dbpass }}"
+       login_user: "{{ dest_dbusername }}"
+    - name: Restore Dump to Destination Db
+      postgresql_db:
+         name: "{{ db_name }}"
+         login_host: "{{ dest_dbhost }}"
+         login_user: "{{ dest_dbusername }}"
+         login_password: "{{ dest_dbpass }}"
+         state: restore
+         target: /tmp/migrate_db1.sql
+    - name: avoid usage of replication role on destination DB
+      copy:
+         src: Bucardo.pm
+         dest: /usr/share/perl5/Bucardo.pm
+         backup: yes
+         force: yes
+      tags:
+          - replaceit       
+    - name: Install pexpect
+      pip:
+        name: pexpect
+    - name: Setup Bucardo
+      expect:
+       command: bucardo install
+       responses:
+          (?i)proceed: P
+      ignore_errors: true
+      register: command_result
+      failed_when: >
+         command_result.rc !=0 and ("already have Bucardo installed there" not in command_result.stdout)
+      changed_when: >
+         command_result.rc == 0
+    - name: Add Source DB to bucardo
+      shell: bucardo add db {{ bucardo_src_db }} dbhost={{ dbhost }} dbport={{ dbport }} dbname={{ db_name }} dbuser={{ dbusername }} dbpass={{ dbpass }}
+      register: command_result
+      failed_when: >
+        command_result.rc != 0 and ("already exists" not in command_result.stdout)
+      changed_when: >
+        command_result.rc == 0
+    - name: Add Destination DB to bucardo
+      shell: bucardo add db {{ bucardo_dest_db }} dbhost={{ dest_dbhost }} dbport={{ dest_dbport }} dbname={{ db_name }} dbuser={{ dest_dbusername }} dbpass={{ dest_dbpass }}
+      register: command_result
+      failed_when: >
+        command_result.rc != 0 and ("already exists" not in command_result.stdout)
+      changed_when: >
+        command_result.rc == 0
+    - name: Add Table name and create a herd or sync
+      shell: bucardo add tables {{ table_name }} herd={{ herd_name }} db={{ bucardo_src_db }}
+      register: command_result
+      failed_when: >
+       command_result.rc != 0 and ("already exists" not in command_result.stdout_lines[0])
+      changed_when: >
+       command_result.rc == 0
+    - name: Add Sync
+      shell: bucardo add sync {{ bucardo_sync }} relgroup={{ herd_name }} db={{ bucardo_src_db }},{{ bucardo_dest_db }}
+      register: command_result
+      failed_when: >
+       command_result.rc != 0 and ("already exists" not in command_result.stderr)
+      changed_when: >
+       command_result.rc == 0
+    - name: restart bucardo
+      shell: bucardo restart
+  
